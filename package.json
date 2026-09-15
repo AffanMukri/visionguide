@@ -1,0 +1,18 @@
+{
+  "name": "visionguide-prototype",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Accessible camera-preview and spoken-guidance prototype",
+  "scripts": {
+    "start": "node server.cjs",
+    "test": "node tests/verify-auth.cjs && node tests/verify-camera.cjs && node tests/verify-voice.cjs && node tests/verify-vision.cjs && node tests/verify-navigation.cjs && node tests/verify-navigation-server.cjs",
+    "test:browser": "node tests/browser-navigation.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "maplibre-gl": "6.9.1"
+  }
+}

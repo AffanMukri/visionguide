@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#253cec">
+  <meta name="description" content="VisionGuide: camera awareness, text reading, and live walking navigation designed for visual accessibility.">
+  <title>VisionGuide — Navigate with Confidence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23253cec' d='m12 2 9 20-9-6-9 6z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="experience.css">
+  <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div id="app"></div>
+  <div id="toast" role="status"></div>
+  <div id="guidance-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  <dialog id="modal"></dialog>
+  <aside id="voice-control" class="voice-control" aria-label="Voice commands">
+    <button id="voice-toggle" class="voice-toggle" type="button" aria-pressed="false" aria-describedby="voice-status voice-hint">
+      <span class="voice-mic" aria-hidden="true">🎙</span><span id="voice-button-label">Voice commands</span>
+    </button>
+    <div class="voice-control-copy">
+      <strong id="voice-status" role="status" aria-live="polite">Voice commands are off</strong>
+      <span id="voice-transcript" aria-live="polite"></span>
+      <span id="voice-hint">Select the microphone, then say “what is ahead?”</span>
+    </div>
+  </aside>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <script src="visionConfig.js"></script>
+  <script src="sceneState.js"></script>
+  <script src="guidanceManager.js"></script>
+  <script src="camera.js"></script>
+  <script src="tracker.js"></script>
+  <script src="freeSpaceAnalyzer.js"></script>
+  <script src="riskEngine.js"></script>
+  <script src="objectDetection.js"></script>
+  <script src="depthEstimation.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="ocrReader.js"></script>
+  <script type="module" src="mapLibreLoader.js"></script>
+  <script src="locationService.js"></script>
+  <script src="destinationSearch.js"></script>
+  <script src="routingService.js"></script>
+  <script src="routeTracker.js"></script>
+  <script src="navigationEngine.js"></script>
+  <script src="mapController.js"></script>
+  <script src="navigationController.js"></script>
+  <script src="/vendor/supabase/supabase.js"></script>
+  <script src="authService.js"></script>
+  <script src="app.js"></script>
+  <script src="voiceCommands.js"></script>
+</body>
+</html>
