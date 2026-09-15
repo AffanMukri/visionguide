@@ -5,7 +5,33 @@ const assert = require('node:assert/strict');
 const base = 47000 + process.pid % 800;
 const upstreamPort = base, appPort = base + 1000;
 let geocodeCalls = 0, routeBody = null, routeUrl = null, routeUserAgent = '';
+let authHeaders = null, twilioBody = null, twilioAuthorization = '', twilioStatusCalls = 0;
+const messageSid = `SM${'a'.repeat(32)}`;
 const upstream = http.createServer((req, res) => {
+  if (req.url === '/auth/user') {
+    authHeaders = req.headers;
+    if (req.headers.authorization !== 'Bearer test-user-jwt') { res.writeHead(401).end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ id: 'user-1', email: 'walker@example.com', user_metadata: { display_name: 'Test Walker' } }));
+    return;
+  }
+  if (req.url.endsWith('/Messages.json') && req.method === 'POST') {
+    twilioAuthorization = req.headers.authorization || '';
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      twilioBody = new URLSearchParams(body);
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sid: messageSid, status: 'queued' }));
+    });
+    return;
+  }
+  if (req.url.endsWith(`/Messages/${messageSid}.json`) && req.method === 'GET') {
+    twilioStatusCalls++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ sid: messageSid, status: 'delivered' }));
+    return;
+  }
   if (req.url.startsWith('/search')) {
     geocodeCalls++; routeUserAgent = req.headers['user-agent'] || '';
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -39,6 +65,9 @@ async function retry(url) {
   const app = spawn(process.execPath, ['server.cjs'], { windowsHide: true, stdio: 'ignore', env: { ...process.env,
     PORT: String(appPort), GRAPHHOPPER_API_KEY: 'server-only-test-key',
     SUPABASE_URL: 'https://project.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    SUPABASE_AUTH_USER_URL: `http://127.0.0.1:${upstreamPort}/auth/user`,
+    TWILIO_ACCOUNT_SID: `AC${'b'.repeat(32)}`, TWILIO_AUTH_TOKEN: 'server-only-twilio-token',
+    TWILIO_FROM_NUMBER: '+15551234567', TWILIO_API_BASE_URL: `http://127.0.0.1:${upstreamPort}`,
     GRAPHHOPPER_URL: `http://127.0.0.1:${upstreamPort}/route`,
     NOMINATIM_URL: `http://127.0.0.1:${upstreamPort}/search`, NOMINATIM_CONTACT: 'test@example.invalid' } });
   try {
@@ -59,7 +88,29 @@ async function retry(url) {
     const publicConfig = await (await fetch(`http://127.0.0.1:${appPort}/api/public-config`)).json();
     assert.deepEqual(publicConfig.supabase, { url: 'https://project.supabase.co', publishableKey: 'sb_publishable_test', configured: true });
     assert.equal(JSON.stringify(publicConfig).includes('server-only-test-key'), false);
-    console.log('PASS: server-side key protection, public Supabase config, Nominatim cache, GraphHopper foot routing, and local vendor assets.');
+    assert.equal(JSON.stringify(publicConfig).includes('server-only-twilio-token'), false);
+
+    const unauthorized = await fetch(`http://127.0.0.1:${appPort}/api/sos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(unauthorized.status, 401);
+    const sosResponse = await fetch(`http://127.0.0.1:${appPort}/api/sos`, { method: 'POST', headers: {
+      'Content-Type': 'application/json', Authorization: 'Bearer test-user-jwt'
+    }, body: JSON.stringify({ contactName: 'Trusted Person', phone: '+919876543210',
+      location: { latitude: 19.060123, longitude: 72.836456, accuracy: 12, capturedAt: new Date().toISOString() } }) });
+    const sos = await sosResponse.json();
+    assert.equal(sosResponse.status, 202); assert.equal(sos.messageId, messageSid); assert.equal(sos.status, 'queued');
+    assert.equal(authHeaders.apikey, 'sb_publishable_test');
+    assert.equal(twilioBody.get('To'), '+919876543210'); assert.equal(twilioBody.get('From'), '+15551234567');
+    assert.match(twilioBody.get('Body'), /EMERGENCY: Test Walker may need help/);
+    assert.match(twilioBody.get('Body'), /google\.com\/maps\?q=19\.060123,72\.836456/);
+    assert.match(twilioAuthorization, /^Basic /);
+    const statusResponse = await fetch(`http://127.0.0.1:${appPort}/api/sos-status?id=${messageSid}`, { headers: { Authorization: 'Bearer test-user-jwt' } });
+    const status = await statusResponse.json();
+    assert.equal(statusResponse.status, 200); assert.equal(status.status, 'delivered'); assert.equal(status.terminal, true); assert.equal(twilioStatusCalls, 1);
+    const duplicate = await fetch(`http://127.0.0.1:${appPort}/api/sos`, { method: 'POST', headers: {
+      'Content-Type': 'application/json', Authorization: 'Bearer test-user-jwt'
+    }, body: JSON.stringify({ phone: '+919876543210', location: { latitude: 19, longitude: 72, accuracy: 15 } }) });
+    assert.equal(duplicate.status, 429);
+    console.log('PASS: key protection, auth, real SOS request, Google Maps pin, delivery status, rate limit, routing, geocoding, and local assets.');
   } finally {
     app.kill();
     await new Promise(resolve => upstream.close(resolve));

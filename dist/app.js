@@ -5,8 +5,9 @@ const icon=n=>`<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d=
 const btn=(text,action,cls='',extra='')=>`<button class="${cls}" data-action="${action}" ${extra}>${text}</button>`;
 const defaults={voice:true,contrast:false,reduce:false,screen:false,size:'Standard',appearance:'Light',intensity:'Medium',detail:'Standard',distance:'Near · 1.5 m',auto:false,speed:'1',volume:'1',location:true,history:true,notifications:true,confirm:true};
 let saved={};try{saved=JSON.parse(localStorage.getItem('visionguide')||'{}')}catch{}
-let settings={...defaults,...saved.settings},places=saved.places||[{id:1,name:'Home',address:'Bandra West, Mumbai',home:true},{id:2,name:'College',address:'Linking Road, Bandra'},{id:3,name:'Railway Station',address:'Bandra Railway Station'},{id:4,name:'Hospital',address:'Hill Road, Bandra'}],contacts=saved.contacts||[{id:1,name:'Asha Sharma',relationship:'Family',phone:'+91 90000 00000',primary:true}],journeys=saved.journeys||[{name:'College',time:'Today · 9:15 AM',distance:'2.4 km',duration:'28 min',status:'Completed'},{name:'Railway Station',time:'Yesterday · 5:30 PM',distance:'1.8 km',duration:'21 min',status:'Completed'}];
-let authReady=!window.supabaseAuth,authenticated=false,passwordRecovery=false,authBusy=false,authMessage='',authError='',page=authReady?'landing':'auth-loading',onboarded=!!saved.onboarded,destination=null,step=0,paused=true,active=false,mapVisible=true,device='Connected',readIndex=-1,practice=false,practiceIndex=0,sosActive=false,search='',timer=null,toastTimer=null,lastFocus=null,lastSpokenText='',speechResolver=null,speechWatchdog=null;
+const isFictionalContact=c=>c?.name==='Asha Sharma'&&String(c?.phone||'').replace(/\s/g,'')==='+919000000000';
+let settings={...defaults,...saved.settings},places=saved.places||[{id:1,name:'Home',address:'Bandra West, Mumbai',home:true},{id:2,name:'College',address:'Linking Road, Bandra'},{id:3,name:'Railway Station',address:'Bandra Railway Station'},{id:4,name:'Hospital',address:'Hill Road, Bandra'}],contacts=(Array.isArray(saved.contacts)?saved.contacts:[]).filter(c=>!isFictionalContact(c)),journeys=saved.journeys||[{name:'College',time:'Today · 9:15 AM',distance:'2.4 km',duration:'28 min',status:'Completed'},{name:'Railway Station',time:'Yesterday · 5:30 PM',distance:'1.8 km',duration:'21 min',status:'Completed'}];
+let authReady=!window.supabaseAuth,authenticated=false,passwordRecovery=false,authBusy=false,authMessage='',authError='',page=authReady?'landing':'auth-loading',onboarded=!!saved.onboarded,destination=null,step=0,paused=true,active=false,mapVisible=true,device='Connected',readIndex=-1,practice=false,practiceIndex=0,sosActive=false,sosPhase='idle',sosDetail='',sosLocation=null,sosPreparedContact=null,sosMessageId='',sosFallback=null,search='',timer=null,toastTimer=null,lastFocus=null,lastSpokenText='',speechResolver=null,speechWatchdog=null;
 const sequence=[['Navigation started','Your journey is ready','straight','650 m','8 min'],['Continue straight','Continue for 40 m','straight','610 m','7 min'],['Slow down','Pole ahead · 1.5 m','sos','560 m','7 min','warning'],['Move slightly left','Obstacle ahead · 0.8 m','left','540 m','6 min'],['Path clear','Continue for 40 m','check','450 m','5 min'],['Stairs ahead','Slow down · Use the handrail','stairs','350 m','4 min','warning'],['Turn right','Turn right in 20 m','right','250 m','3 min'],['Continue straight','Your destination is ahead','straight','100 m','1 min'],["You’ve arrived",'Destination reached successfully','check','0 m','0 min']];
 const practiceCommands=[['Continue straight','Follow the path ahead','straight'],['Move left','Move slightly to your left','left'],['Move right','Move slightly to your right','right'],['Slow down','Take your time','sos'],['Stop','Obstacle directly ahead','sos'],['Stairs ahead','Slow down','stairs']];
 function persist(){try{localStorage.setItem('visionguide',JSON.stringify({settings,places,contacts,journeys:settings.history?journeys:[],onboarded}))}catch{}}
@@ -132,9 +133,12 @@ function onboarding() {
   return '<main class="onboarding" id="main" tabindex="-1">'+brand()+body+'</main>';
 }
 function home() {
-  return '<div class="home-heading"><div><div class="eyebrow">A little awareness. More independence.</div><h1>Your world.<br><span>Your next step.</span></h1></div><div class="home-location">'+icon('pin')+'<span>'+(settings.location?'Bandra West, Mumbai':'Demo location is off')+'<small>YOUR STARTING POINT · DEMO</small></span></div></div>' +
-  '<section class="guide-hero"><div class="hero-copy"><span class="hero-kicker">'+icon('camera')+' CAMERA GUIDE</span><h2>Hear what’s ahead.<br>Move with confidence.</h2><p>Simple spoken directions for the things around you. One clear action at a time.</p>'+btn(icon('camera')+' Start camera guide '+icon('arrow'),'camera','hero-primary')+'<div class="hero-secondary">'+btn(icon('voice')+' Hear an example','hear-example','hero-link')+'<span>Camera access is your choice</span></div><div class="hero-footnote">'+icon('shield')+' Prototype · Object awareness is simulated</div></div><div class="hero-cue"><div class="hero-cue-top"><span>SAMPLE GUIDANCE</span>'+icon('voice')+'</div><div class="hero-arrow">'+icon('left')+'</div><h3>Move slightly<br>left.</h3><div class="hero-obstacle">'+icon('environment')+'<span>Pole ahead<strong>Sample distance · 1.5 m</strong></span></div><div class="hero-wave">'+wave()+'<span>One cue. Spoken clearly.</span></div></div></section>' +
-  '<div class="home-tools">'+btn('<span class="tool-icon">'+icon('navigate')+'</span><span><strong>Go somewhere</strong><small>Choose your destination</small></span>'+icon('arrow'),'navigate','tool-card')+btn('<span class="tool-icon">'+icon('read')+'</span><span><strong>Read a sign</strong><small>Hear sample text aloud</small></span>'+icon('arrow'),'read','tool-card')+btn('<span class="tool-icon">'+icon('book')+'</span><span><strong>Get comfortable</strong><small>Practice at your own pace</small></span>'+icon('arrow'),'practice','tool-card')+'</div>'+
+  const liveLocation=window.navigationUI?.getState?.()?.location;
+  const locationTitle=liveLocation?`${Number(liveLocation.latitude).toFixed(5)}, ${Number(liveLocation.longitude).toFixed(5)}`:settings.location?'Location services ready':'Location is off';
+  const locationCaption=liveLocation?'CURRENT LIVE POSITION':settings.location?'LIVE GPS STARTS WHEN NEEDED':'TURN ON LOCATION IN PRIVACY';
+  return '<div class="home-heading"><div><div class="eyebrow">A little awareness. More independence.</div><h1>Your world.<br><span>Your next step.</span></h1></div><div class="home-location">'+icon('pin')+'<span>'+locationTitle+'<small>'+locationCaption+'</small></span></div></div>' +
+  '<section class="guide-hero"><div class="hero-copy"><span class="hero-kicker">'+icon('camera')+' CAMERA GUIDE</span><h2>Hear what’s ahead.<br>Move with confidence.</h2><p>Simple spoken directions from live camera analysis. One clear action at a time.</p>'+btn(icon('camera')+' Start camera guide '+icon('arrow'),'camera','hero-primary')+'<div class="hero-secondary">'+btn(icon('shield')+' Camera privacy','privacy','hero-link')+'<span>Camera access is always your choice</span></div><div class="hero-footnote">'+icon('shield')+' Live analysis runs in your browser</div></div><div class="hero-cue"><div class="hero-cue-top"><span>LIVE CAMERA GUIDANCE</span>'+icon('voice')+'</div><div class="hero-arrow">'+icon('camera')+'</div><h3>Point ahead.<br>Hear what matters.</h3><div class="hero-obstacle">'+icon('shield')+'<span>On-device analysis<strong>Guidance begins after you start the camera</strong></span></div><div class="hero-wave">'+wave()+'<span>Short, useful cues spoken clearly.</span></div></div></section>' +
+  '<div class="home-tools">'+btn('<span class="tool-icon">'+icon('navigate')+'</span><span><strong>Go somewhere</strong><small>Choose your destination</small></span>'+icon('arrow'),'navigate','tool-card')+btn('<span class="tool-icon">'+icon('read')+'</span><span><strong>Read a sign</strong><small>Use live camera text reading</small></span>'+icon('arrow'),'read','tool-card')+btn('<span class="tool-icon">'+icon('book')+'</span><span><strong>Get comfortable</strong><small>Practice at your own pace</small></span>'+icon('arrow'),'practice','tool-card')+'</div>'+
   '<div class="home-bottom"><section class="familiar-places"><div class="row section-title"><h2>Familiar places</h2>'+btn('Manage places '+icon('arrow'),'places','text-button')+'</div><div class="saved-shortcuts">'+places.slice(0,3).map(p=>'<button class="saved-shortcut" data-place="'+p.id+'"><span class="iconbox">'+icon(p.home?'home':p.name.includes('Station')?'train':'pin')+'</span><strong>'+esc(p.name)+'</strong><small>'+esc(p.address)+'</small></button>').join('')+'</div></section><section class="comfort-card"><div class="eyebrow">DESIGNED AROUND YOU</div><h2>Make it easier to use.</h2><p>Larger text, clearer contrast, and a voice that moves at your pace.</p>'+btn('Accessibility options '+icon('arrow'),'accessibility','text-button')+'</section></div>';
 }
 function placeRow(p){return `<button class="place-row" data-place="${p.id}"><span class="iconbox">${icon(p.home?'home':p.name.includes('Station')?'train':'pin')}</span><span class="place-copy"><strong>${esc(p.name)}</strong><small>${esc(p.address)}</small></span>${icon('arrow')}</button>`}
@@ -147,49 +151,32 @@ function guidance(){if(!active)return heading('Navigate')+empty('No active journ
 function environment(){return heading('Around you','A simple view of your surroundings.')+`<div class="grid"><div class="stack"><section class="alert-box"><div class="eyebrow">Immediate</div><h2>${icon('sos')} Pole · 0.8 m · Front</h2><p>Move slightly left.</p>${btn('Preview safety alert','safety-stop','danger','style="margin-top:20px"')}</section><section class="card"><div class="eyebrow">Nearby</div><h2>${icon('person')} Person · 2.1 m · Right</h2><p class="muted">Keep to your path.</p></section><section class="card"><div class="eyebrow">Further</div><h2>${icon('car')} Vehicle · 6 m · Left</h2>${btn('Preview vehicle warning','safety-car','text-button')}</section></div><section class="card practice-card"><h2>Your next step comes first.</h2><p class="muted">These are sample objects. Try Camera guide to hear one clear direction for each situation.</p>${btn(icon('camera')+' Open Camera guide','camera','primary')}${btn('Start Navigation','navigate','primary','style="margin-top:22px"')}${note()}</section></div>`}
 /* ── OCR Reader state ─────────────────────────────────────────────────── */
 let ocrStream = null, ocrCamActive = false, ocrCameraState = 'off', ocrCameraError = '', ocrCameraRequest = 0;
-const sampleSigns = ['Room 204', 'Exit', 'Platform 2', 'Main Office'];
 
 function read() {
   const hist = window.ocrAPI ? window.ocrAPI.getHistory() : [];
-  const histHtml = hist.length
-    ? `<div class="ocr-history"><span class="eyebrow">Recent scans</span><div class="ocr-hist-list">${
+  const histHtml = `<div class="ocr-history"><div class="ocr-section-heading"><div><span class="eyebrow">Recent scans</span><h3>Your latest text</h3></div><span class="ocr-count">${hist.length}</span></div><div class="ocr-hist-list">${hist.length
+      ?
         hist.map(h => `<div class="ocr-hist-item">
           ${h.thumb ? `<img class="ocr-thumb" src="${h.thumb}" alt="">` : ''}
           <div class="ocr-hist-copy">
             <strong>${esc(h.text)}</strong>
             <small>${Math.round(h.conf)}% confidence · ${new Date(h.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</small>
           </div>
-          <button class="ocr-repeat-btn" data-action="ocr-speak" data-text="${esc(h.text)}">${icon('voice')}</button>
+          <button class="ocr-repeat-btn" data-action="ocr-speak" data-text="${esc(h.text)}" aria-label="Read ${esc(h.text)} aloud">${icon('voice')}</button>
         </div>`).join('')
-      }</div></div>`
-    : '';
+      : `<div class="ocr-history-empty">${icon('activity')}<p>Your accepted scans will appear here.</p></div>`
+    }</div></div>`;
 
-  const sampleCard = `<section class="card ocr-sample-card" style="margin-top:24px">
-    <div class="row">
-      <div>
-        <span class="pill">Sample text demonstration</span>
-        <h3 style="margin-top:6px">Quick test signs</h3>
-        <p class="muted">Cycle through predefined signs without pointing a camera.</p>
-      </div>
-    </div>
-    <div class="read-target" style="margin:20px 0">
-      ${icon('read')}
-      <h1 style="margin-top:14px">${readIndex < 0 ? 'A little clarity.' : sampleSigns[readIndex]}</h1>
-      <p class="muted">${readIndex < 0 ? 'Select Read Text to try a sample.' : 'Sample result · No camera access needed'}</p>
-    </div>
-    ${readIndex < 0 ? btn('Read Text', 'read-text', 'primary wide') : `<div class="chips">${btn(icon('voice') + ' Read Aloud', 'read-aloud', 'primary')}${btn('Read Again', 'read-text')}${btn('Close', 'close-read')}</div>`}
-    <p class="muted" style="margin-top:10px;font-size:.82rem">This prototype cycles through predefined signs.</p>
-  </section>`;
-
-  return heading('Read what’s ahead.', 'Point at a sign, board or label — VisionGuide reads it aloud.') +
-  `<div class="ocr-layout">
-    <!-- Left: camera + controls -->
+  return heading('Read what’s ahead.', 'Point your camera at real-world text and hear the live result.', `<span class="pill">${icon('shield')} On-device OCR</span>`) +
+  `<section class="ocr-workspace">
+    <div class="ocr-layout">
     <section class="ocr-camera-section">
+      <div class="ocr-panel-heading"><div><span class="eyebrow">Live camera</span><h2>${ocrCamActive?'Frame the text clearly':'Start live text reading'}</h2></div>${ocrCamActive?'<span class="live-pulse-label"><i></i> Camera live</span>':''}</div>
       ${ ocrCamActive
         ? `<div class="ocr-video-wrap">
             <video id="ocr-video" autoplay playsinline muted aria-label="OCR camera preview"></video>
             <canvas id="ocr-word-overlay" class="ocr-overlay-canvas" aria-hidden="true"></canvas>
-            <span id="ocr-status-badge" class="ocr-status-badge ocr-badge-loading">⏳ Initialising…</span>
+            <span id="ocr-status-badge" class="ocr-status-badge ocr-badge-loading">Initialising OCR…</span>
           </div>
           <div class="ocr-controls">
             ${btn(icon('focus') + ' Scan Now', 'ocr-scan', 'primary')}
@@ -202,50 +189,65 @@ function read() {
           </div>`
         : `<div class="ocr-start-card">
             <span class="ocr-icon-ring">${icon('read')}</span>
-            <h2>${ocrCameraState === 'requesting' ? 'Allow camera access' : ocrCameraState === 'error' ? 'Camera unavailable' : 'Camera OCR'}</h2>
+            <h2>${ocrCameraState === 'requesting' ? 'Allow camera access' : ocrCameraState === 'error' ? 'Camera unavailable' : 'Ready when you are'}</h2>
             <p>${ocrCameraState === 'requesting' ? 'Your browser may ask for camera permission.' : ocrCameraState === 'error' ? esc(ocrCameraError) : 'Point your camera at any sign, board, signal or label and VisionGuide will read it aloud.'}</p>
-            <p class="muted">Works with: exit signs, platform numbers, menu boards, street signs, elevator buttons&nbsp;&amp;&nbsp;more.</p>
+            <div class="ocr-use-cases"><span>Street signs</span><span>Menus</span><span>Labels</span><span>Platform boards</span></div>
             ${btn(icon('camera') + (ocrCameraState === 'requesting' ? ' Waiting for permission…' : ocrCameraState === 'error' ? ' Try camera again' : ' Start reading camera'), 'ocr-start', 'primary wide', ocrCameraState === 'requesting' ? 'disabled' : '')}
           </div>`
       }
     </section>
 
-    <!-- Right: live results + history -->
     <section class="ocr-results-section">
       <div class="ocr-result-card">
-        <span class="eyebrow">${icon('voice')} Live result</span>
+        <div class="ocr-section-heading"><div><span class="eyebrow">Live result</span><h2>${hist[0]?'Text detected':'Waiting for a scan'}</h2></div>${icon('voice')}</div>
         <div id="ocr-live-result" class="ocr-live-result">
           ${ hist.length && hist[0]
             ? `<div class="ocr-big-text">${esc(hist[0].text)}</div>
                <div class="ocr-meta">${Math.round(hist[0].conf)}% confidence</div>
                <div class="ocr-chips">
                  ${btn(icon('voice') + ' Read aloud', 'ocr-speak', 'primary', `data-text="${esc(hist[0].text)}"`)}
-                 ${btn(icon('focus') + ' Scan again', 'ocr-scan')}
+                 ${btn(icon(ocrCamActive?'focus':'camera') + (ocrCamActive?' Scan again':' Start camera'), ocrCamActive?'ocr-scan':'ocr-start')}
                </div>`
-            : `<div class="ocr-placeholder">${icon('read')}<p>Scan result will appear here.</p></div>`
+            : `<div class="ocr-placeholder">${icon('read')}<p><strong>Detected text appears here.</strong><span>Start the camera, hold it steady, then select Scan Now.</span></p></div>`
           }
         </div>
       </div>
       ${histHtml}
     </section>
-  </div>
-  <p class="muted" style="margin-top:14px;font-size:.82rem">OCR runs entirely in your browser via Tesseract.js — no data is uploaded.</p>
-  ${sampleCard}`;
+    </div>
+    <div class="ocr-privacy-strip">${icon('shield')}<span><strong>Private by design</strong><small>OCR runs in this browser. Camera frames and detected text are not uploaded by VisionGuide.</small></span></div>
+  </section>`;
 }
-function sos(){const c=contacts.find(c=>c.primary)||contacts[0];return heading('Help is close.','Emergency support, easy to reach.')+`<div class="grid"><section class="alert-box">${icon('sos')}<h1>${sosActive?'Emergency Alert Active':'SOS'}</h1><p>${sosActive?'Demo: sharing your current location with your emergency contact.':'Start a simulated alert to your primary emergency contact.'}</p><p><strong>Prototype only — no message or emergency call is sent.</strong></p>${btn(sosActive?'Cancel Alert':'Activate SOS',sosActive?'cancel-sos':'confirm-sos','danger wide','style="margin-top:26px"')}</section><section class="card stack"><div><div class="eyebrow">Current location</div><h2>${settings.location?'Bandra West, Mumbai':'Location unavailable'}</h2>${!settings.location?btn('Enable Location','enable-location','text-button'):''}</div><div><div class="eyebrow">Primary emergency contact</div><h2>${c?esc(c.name):'No contact added'}</h2><p class="muted">${c?esc(c.relationship)+' · '+esc(c.phone):'Add someone you trust.'}</p></div>${btn('Manage Emergency Contacts','contacts','wide')}</section></div>`}
-function settingsPage(accessOnly=false){return heading(accessOnly?'Made for you.':'Settings',accessOnly?'Adjust how VisionGuide looks and feels.':'Your guidance, your preferences.')+`<div class="grid"><div class="stack"><section class="card"><h2>Accessibility</h2><div class="preset-grid">${btn(icon('voice')+' Listen first','listen-preset','preset-card')}${btn(icon('sun')+' More contrast','contrast-preset','preset-card')}</div>${accessibility()}${toggle('screen','Screen reader optimization')}</section>${accessOnly?'':`<section class="card"><h2>Navigation</h2>${select('detail','Guidance detail',['Minimal','Standard','Detailed'])}${select('distance','Alert distance',['Near · 1.5 m','Earlier · 3 m'])}${toggle('auto','Auto-start guidance')}</section><section class="card"><h2>Feedback</h2>${select('speed','Voice speed',[['0.8','Slower'],['1','Normal'],['1.2','Faster']])}${select('volume','Voice volume',[['0.4','Low'],['0.7','Medium'],['1','Full']])}${btn('Preview voice feedback','test-voice','text-button')}</section>`}</div><div class="stack"><section class="card practice-card"><div class="eyebrow">Live preview</div><h2>${icon('straight')} Continue straight</h2><p>Continue for 40 m.</p>${btn('Preview guidance','test-voice','text-button')}</section>${accessOnly?'':`<section class="card"><h2>Safety</h2>${toggle('confirm','SOS confirmation')}<p class="muted">${settings.confirm?'Confirm before starting the demo alert.':'A brief two-step confirmation remains available to prevent accidental alerts.'}</p>${btn('Emergency Contacts '+icon('arrow'),'contacts','text-button')}</section><section class="card"><h2>Privacy</h2>${toggle('location','Location preference')}${toggle('history','Keep journey history')}${btn('Privacy Center '+icon('arrow'),'privacy','text-button')}</section><section class="card"><h2>VisionGuide Device</h2><p>${device} ${device==='Connected'?'· Battery 82%':''}</p>${btn(device==='Connected'?'Disconnect demo device':'Reconnect',device==='Connected'?'disconnect':'reconnect','text-button')}</section><section class="card"><h2>Your places</h2>${btn('Manage Saved Places '+icon('arrow'),'places','text-button')}${btn('Replay onboarding','replay-onboarding','text-button wide')}</section>`}</div></div>`}
+function primarySosContact(){return contacts.find(c=>c.primary)||contacts[0]||null}
+function sosStatusText(){
+  if(sosPhase==='locating')return ['Getting your live location…','Keep this page open while GPS finds your position.'];
+  if(sosPhase==='sending')return ['Sending emergency SMS…','Your confirmed location is being sent securely.'];
+  if(sosPhase==='delivered')return ['Emergency contact notified','The SMS provider confirmed delivery to the contact’s phone.'];
+  if(['queued','accepted','sending','sent'].includes(sosPhase))return ['Emergency SMS is on its way',`Provider status: ${sosPhase}. Delivery confirmation will update here.`];
+  if(sosPhase==='fallback')return ['Automatic SMS did not send','Open your phone’s Messages app below and press Send.'];
+  if(['failed','undelivered','canceled','error'].includes(sosPhase))return ['Emergency SMS was not delivered',sosDetail||'Try again or use your phone to contact the person directly.'];
+  return ['Send an emergency alert','VisionGuide will get fresh GPS and ask you to confirm before sending.'];
+}
+function sos(){
+  const c=primarySosContact(),status=sosStatusText(),hasLocation=Boolean(sosLocation),busy=['locating','sending'].includes(sosPhase);
+  const locationHtml=hasLocation?`<h2>${Number(sosLocation.latitude).toFixed(6)}, ${Number(sosLocation.longitude).toFixed(6)}</h2><p class="muted">Accuracy about ±${Math.max(1,Math.round(sosLocation.accuracy))} metres · <a href="${window.sosAPI.mapUrl(sosLocation)}" target="_blank" rel="noopener">Open Google Maps pin</a></p>`:`<h2>Captured when you activate SOS</h2><p class="muted">Precise location permission is required.</p>`;
+  const mainAction=!c?'sos-add-contact':busy?'confirm-sos':sosActive||sosPhase==='fallback'?'confirm-sos':'confirm-sos';
+  const mainLabel=!c?'Add emergency contact':busy?status[0]:sosActive||sosPhase==='fallback'?'Send another SOS':'Prepare SOS alert';
+  return heading('Help is close.','Send your live location to someone you trust.')+`<div class="grid"><section class="alert-box sos-alert sos-${esc(sosPhase)}" aria-live="polite">${icon(sosPhase==='delivered'?'check':'sos')}<div class="eyebrow">Emergency SMS</div><h1>${esc(status[0])}</h1><p>${esc(status[1])}</p>${sosDetail&&!['failed','undelivered','canceled','error'].includes(sosPhase)?`<p class="sos-detail">${esc(sosDetail)}</p>`:''}<p><strong>This contacts your saved person, not police, ambulance, or other emergency services.</strong></p>${btn(mainLabel,mainAction,'danger wide',`style="margin-top:26px" ${busy?'disabled aria-disabled="true"':''}`)}${(sosActive||sosPhase==='fallback')?btn('Clear this status','clear-sos','text-button wide'):''}</section><section class="card stack"><div><div class="eyebrow">Live location</div>${locationHtml}</div><div><div class="eyebrow">Primary emergency contact</div><h2>${c?esc(c.name):'No contact added'}</h2><p class="muted">${c?esc(c.relationship)+' · '+esc(c.phone):'Add a real mobile number before using SOS.'}</p></div>${sosPhase==='fallback'&&sosFallback?`<div class="sos-fallback"><strong>Phone fallback ready</strong><p class="muted">The message is prepared but has not been sent.</p>${btn('Open Messages app','open-sms-app','primary wide')}${btn('Copy emergency text','copy-sos-message','wide')}</div>`:''}${btn('Manage Emergency Contacts','contacts','wide')}</section></div>`;
+}
+function settingsPage(accessOnly=false){return heading(accessOnly?'Made for you.':'Settings',accessOnly?'Adjust how VisionGuide looks and feels.':'Your guidance, your preferences.')+`<div class="grid"><div class="stack"><section class="card"><h2>Accessibility</h2><div class="preset-grid">${btn(icon('voice')+' Listen first','listen-preset','preset-card')}${btn(icon('sun')+' More contrast','contrast-preset','preset-card')}</div>${accessibility()}${toggle('screen','Screen reader optimization')}</section>${accessOnly?'':`<section class="card"><h2>Navigation</h2>${select('detail','Guidance detail',['Minimal','Standard','Detailed'])}${select('distance','Alert distance',['Near · 1.5 m','Earlier · 3 m'])}${toggle('auto','Auto-start guidance')}</section><section class="card"><h2>Feedback</h2>${select('speed','Voice speed',[['0.8','Slower'],['1','Normal'],['1.2','Faster']])}${select('volume','Voice volume',[['0.4','Low'],['0.7','Medium'],['1','Full']])}${btn('Preview voice feedback','test-voice','text-button')}</section>`}</div><div class="stack"><section class="card practice-card"><div class="eyebrow">Live preview</div><h2>${icon('straight')} Continue straight</h2><p>Continue for 40 m.</p>${btn('Preview guidance','test-voice','text-button')}</section>${accessOnly?'':`<section class="card"><h2>Safety</h2>${toggle('confirm','SOS confirmation')}<p class="muted">A confirmation step is always shown before a real emergency SMS is sent.</p>${btn('Emergency Contacts '+icon('arrow'),'contacts','text-button')}</section><section class="card"><h2>Privacy</h2>${toggle('location','Location preference')}${toggle('history','Keep journey history')}${btn('Privacy Center '+icon('arrow'),'privacy','text-button')}</section><section class="card"><h2>VisionGuide Device</h2><p>${device} ${device==='Connected'?'· Battery 82%':''}</p>${btn(device==='Connected'?'Disconnect demo device':'Reconnect',device==='Connected'?'disconnect':'reconnect','text-button')}</section><section class="card"><h2>Your places</h2>${btn('Manage Saved Places '+icon('arrow'),'places','text-button')}${btn('Replay onboarding','replay-onboarding','text-button wide')}</section>`}</div></div>`}
 function activity(){return heading('Recent journeys','A familiar path, remembered.')+`<section class="card">${settings.history&&journeys.length?journeys.map((j,i)=>`<button class="place-row" data-journey="${i}"><span class="iconbox">${icon('activity')}</span><span class="place-copy"><strong>${esc(j.name)}</strong><small>${esc(j.time)} · ${j.distance}</small></span>${icon('arrow')}</button>`).join(''):`<div class="empty"><h2>${settings.history?'No journeys yet':'Journey history is off'}</h2><p class="muted">${settings.history?'Your completed journeys will appear here.':'Enable journey history in Privacy Center to keep future journeys.'}</p>${btn(settings.history?'Start Navigation':'Privacy Center',settings.history?'navigate':'privacy','primary')}</div>`}</section>`}
 function placesPage(){return heading('Your saved places','Keep familiar destinations close.',btn(icon('plus')+' Add Place','add-place','primary'))+`<section class="card">${places.map(p=>`<div class="contact">${placeRow(p)}<div class="list-actions">${btn('Rename','rename-place','','data-id="'+p.id+'"')}${btn(p.home?'Home place':'Set as Home','set-home','',`data-id="${p.id}" ${p.home?'disabled':''}`)}${btn('Remove','remove-place','',`data-id="${p.id}"`)}</div></div>`).join('')||'<p>No saved places. Add a place above.</p>'}</section>`}
-function contactsPage(){return heading('Emergency contacts','The people you trust.',btn(icon('plus')+' Add Contact','add-contact','primary'))+`<section class="card">${contacts.map(c=>`<div class="contact"><div class="row"><h2>${esc(c.name)}</h2>${c.primary?'<span class="pill">Primary</span>':''}</div><p class="muted">${esc(c.relationship)} · ${esc(c.phone)}</p><div class="list-actions">${btn('Edit','edit-contact','',`data-id="${c.id}"`)}${btn('Set Primary','primary-contact','',`data-id="${c.id}" ${c.primary?'disabled':''}`)}${btn('Remove','remove-contact','',`data-id="${c.id}"`)}</div></div>`).join('')||'<p>No emergency contacts. Add someone you trust.</p>'}</section><p class="notice">Contact details stay in this browser. Default contact information is fictional.</p>`}
+function contactsPage(){return heading('Emergency contacts','The people you trust.',btn(icon('plus')+' Add Contact','add-contact','primary'))+`<section class="card">${contacts.map(c=>`<div class="contact"><div class="row"><h2>${esc(c.name)}</h2>${c.primary?'<span class="pill">Primary</span>':''}</div><p class="muted">${esc(c.relationship)} · ${esc(c.phone)}</p><div class="list-actions">${btn('Edit','edit-contact','',`data-id="${c.id}"`)}${btn('Set Primary','primary-contact','',`data-id="${c.id}" ${c.primary?'disabled':''}`)}${btn('Remove','remove-contact','',`data-id="${c.id}"`)}</div></div>`).join('')||'<p>No emergency contacts. Add a real mobile number for someone who has agreed to receive your emergency alerts.</p>'}</section><p class="notice">Contacts stay in this browser. During SOS, only the selected phone number and live location are sent through the server to the SMS provider.</p>`}
 function privacy() {
-  return heading('Your privacy. Your choice.','Clear controls, without the small print.')+'<div class="stack" style="max-width:760px"><section class="card"><h2>'+icon('camera')+' Camera preview</h2><p class="muted">Camera access is optional and requested only after you choose Allow camera access. The live feed stays in the video preview. It is not recorded or uploaded.</p><p class="muted">Camera access stops when you leave Camera guide, hide the app, or end your session. Camera capture never includes audio.</p>'+btn('Open Camera guide','camera','text-button')+'</section><section class="card"><h2>'+icon('voice')+' Voice commands</h2><p class="muted">Microphone access is optional and requested only after you select Voice commands. Listening stops when you select Stop listening, hide the app, or close the page.</p><p class="muted">Recognition availability and processing depend on your browser and operating system.</p></section><section class="card"><h2>Guidance</h2><p class="muted">Live camera mode uses in-browser object detection to generate guidance. Demo mode, routes, locations, and emergency alerts remain simulated and must not be used as a mobility or emergency service.</p></section><section class="card"><h2>Your location</h2><p class="muted">The prototype uses Bandra West as a sample starting point. It does not request your actual location.</p>'+toggle('location','Demo location')+'</section><section class="card"><h2>Journey history</h2><p class="muted">Keep previous journeys in this browser. Turning this off clears saved journey history.</p>'+toggle('history','Keep journey history')+'</section></div>';
+  return heading('Your privacy. Your choice.','Clear controls, without the small print.')+'<div class="stack" style="max-width:760px"><section class="card"><h2>'+icon('camera')+' Camera preview</h2><p class="muted">Camera access is optional and requested only after you choose Allow camera access. The live feed stays in the video preview. It is not recorded or uploaded.</p><p class="muted">Camera access stops when you leave Camera guide, hide the app, or end your session. Camera capture never includes audio.</p>'+btn('Open Camera guide','camera','text-button')+'</section><section class="card"><h2>'+icon('voice')+' Voice commands</h2><p class="muted">Microphone access is optional and requested only after you select Voice commands. Listening stops when you select Stop listening, hide the app, or close the page.</p><p class="muted">Recognition availability and processing depend on your browser and operating system.</p></section><section class="card"><h2>Guidance</h2><p class="muted">Live camera analysis and walking guidance are experimental accessibility aids. Do not rely on VisionGuide as a replacement for mobility skills or awareness of your surroundings.</p></section><section class="card"><h2>Emergency alerts and location</h2><p class="muted">SOS requests a fresh precise location only after you activate it. After confirmation, the primary contact’s phone number and your coordinates are sent to the server and SMS provider. The message includes a Google Maps pin. VisionGuide does not contact public emergency services.</p>'+toggle('location','Allow location features')+'</section><section class="card"><h2>Journey history</h2><p class="muted">Keep previous journeys in this browser. Turning this off clears saved journey history.</p>'+toggle('history','Keep journey history')+'</section></div>';
 }
 function practicePage(){return heading('A little practice. A lot of clarity.',"Learn VisionGuide’s navigation alerts before using navigation.")+(!practice?`<section class="card empty">${icon('book')}<h2>Find your pace.</h2><p class="muted">Try six guidance cues. Listen and move between them when you’re ready.</p>${btn('Start Practice','start-practice','primary')}</section>`:`<div class="grid"><div>${instruction([...practiceCommands[practiceIndex],null,null,practiceIndex===4?'stop':practiceIndex>=3?'warning':''])}${btn('Finish Practice','finish-practice','primary wide','style="margin-top:20px"')}</div><section class="card"><h2>Choose a cue</h2><div class="stack" style="margin-top:22px;gap:10px">${practiceCommands.map((c,i)=>btn(icon(c[2])+' '+c[0],'practice-cue',i===practiceIndex?'selected':'',`data-id="${i}" aria-pressed="${i===practiceIndex}"`)).join('')}</div></section></div>`)}
 function refreshProductClaims() {
   const welcomeNote = document.querySelector('.welcome-note');
   if (welcomeNote) welcomeNote.textContent = 'Live analysis is experimental. Camera-free directions are simulated.';
   const heroFootnote = document.querySelector('.hero-footnote');
-  if (heroFootnote) heroFootnote.textContent = 'Experimental live analysis · Simulated demo available';
+  if (heroFootnote) heroFootnote.textContent = 'Live analysis runs in your browser';
   const boundary = document.querySelector('.prototype-boundary');
   if (boundary && page === 'camera' && cameraDemo) boundary.textContent = 'Camera-free demonstration. All directions and distances are predefined.';
 }
@@ -451,13 +453,85 @@ document.addEventListener('submit', async e => {
 }, true);
 function modal(title,body){lastFocus=document.activeElement;$('#modal').innerHTML=`<h2>${title}</h2>${body}`;$('#modal').showModal()}
 function closeModal(){$('#modal').close();if(lastFocus?.isConnected)lastFocus.focus()}
-function formDialog(type,id){let item=type==='contact'?contacts.find(c=>c.id===id):places.find(p=>p.id===id);modal(item?'Edit '+(type==='contact'?'contact':'place'):'Add '+(type==='contact'?'contact':'destination'),`<form id="edit-form" data-type="${type}" data-id="${id||''}"><label for="item-name">Name</label><input id="item-name" name="name" required maxlength="60" value="${esc(item?.name||'')}">${type==='contact'?`<label for="relationship">Relationship</label><input id="relationship" name="relationship" required maxlength="40" value="${esc(item?.relationship||'')}"><label for="phone">Phone number</label><input id="phone" type="tel" name="phone" required minlength="7" maxlength="25" value="${esc(item?.phone||'')}">`:`<label for="address">Address</label><input id="address" name="address" required maxlength="120" value="${esc(item?.address||'')}">${!item?'<p class="muted">New addresses can be saved. Route previews are available for the four sample places.</p>':''}`}<div class="list-actions">${btn('Cancel','close-modal')}<button type="submit" class="primary">Save</button></div></form>`)}
+function formDialog(type,id){
+  const item=type==='contact'?contacts.find(c=>c.id===id):places.find(p=>p.id===id);
+  const contactFields=`<label for="relationship">Relationship</label><input id="relationship" name="relationship" required maxlength="40" value="${esc(item?.relationship||'')}"><label for="phone">Mobile number</label><input id="phone" type="tel" inputmode="tel" autocomplete="tel" name="phone" required minlength="10" maxlength="25" placeholder="+91 98765 43210" value="${esc(item?.phone||'')}"><p class="muted">Indian 10-digit mobile numbers are saved with +91 automatically.</p>`;
+  const placeFields=`<label for="address">Address</label><input id="address" name="address" required maxlength="120" value="${esc(item?.address||'')}">${!item?'<p class="muted">New addresses can be saved. Route previews are available for the four sample places.</p>':''}`;
+  modal(item?'Edit '+(type==='contact'?'contact':'place'):'Add '+(type==='contact'?'contact':'destination'),`<form id="edit-form" data-type="${type}" data-id="${id||''}"><label for="item-name">Name</label><input id="item-name" name="name" required maxlength="60" value="${esc(item?.name||'')}">${type==='contact'?contactFields:placeFields}<div class="list-actions">${btn('Cancel','close-modal')}<button type="submit" class="primary">Save</button></div></form>`);
+}
 function startTimer(){clearInterval(timer);if(active&&!paused&&step<8&&device==='Connected'&&settings.location){timer=setInterval(()=>advance(1),7000)}}
 function advance(n){step=Math.max(0,Math.min(8,step+n));if(step===8||sequence[step][5]){paused=true;clearInterval(timer)}speak(sequence[step][0]+'. '+sequence[step][1]);render()}
 function finish(completed){clearInterval(timer);if(settings.history)journeys.unshift({name:destination.name,time:'Today · '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),distance:completed?'650 m':`${Math.round(step/8*650)} m`,duration:completed?'8 min':'Paused early',status:completed?'Completed':'Ended early'});active=false;paused=true;persist();go('activity');toast(completed?'Journey completed. Welcome to your destination.':'Demo journey ended.')}
+function clearSosStatus(){sosActive=false;sosPhase='idle';sosDetail='';sosLocation=null;sosPreparedContact=null;sosMessageId='';sosFallback=null;render()}
+function showSosFallback(error){
+  if(!sosLocation||!sosPreparedContact)return;
+  sosActive=false;sosPhase='fallback';sosDetail=error?.message||'Automatic SMS could not be sent.';
+  sosFallback={phone:sosPreparedContact.phone,message:window.sosAPI.fallbackMessage(sosLocation),url:window.sosAPI.smsUrl(sosPreparedContact.phone,sosLocation)};
+  render();
+  modal('Automatic SMS did not send',`<p>${esc(sosDetail)}</p><p><strong>No message has been sent yet.</strong> Open your phone’s Messages app, check the recipient and press Send.</p><div class="list-actions">${btn('Close','close-modal')}${btn('Open Messages app','open-sms-app','danger')}${btn('Copy text','copy-sos-message','primary')}</div>`);
+  speak('Automatic emergency SMS did not send. Use the Open Messages app button and press Send.');
+}
+async function prepareSosAlert(){
+  if($('#modal')?.open)closeModal();
+  const contact=primarySosContact();
+  if(!contact){go('contacts');formDialog('contact');speak('Add a real emergency contact phone number first.');return false}
+  const phone=window.sosAPI?.normalizePhone(contact.phone);
+  if(!window.sosAPI?.isValidPhone(phone)){
+    modal('Check the emergency number',`<p>${esc(contact.name)} does not have a valid mobile number with a country code.</p><p class="muted">For India, enter a 10-digit mobile number or use +91 followed by the number.</p><div class="list-actions">${btn('Cancel','close-modal')}${btn('Edit Contact','edit-sos-contact','primary',`data-id="${contact.id}"`)}</div>`);
+    speak('The emergency contact phone number is invalid. Edit it before sending SOS.');return false;
+  }
+  sosPhase='locating';sosDetail='';sosActive=false;sosFallback=null;render();speak('Getting your precise live location.');
+  try{
+    sosLocation=await window.sosAPI.getFreshLocation();settings.location=true;persist();
+    sosPreparedContact={...contact,phone};sosPhase='ready';render();
+    const accuracy=Math.max(1,Math.round(sosLocation.accuracy)),link=window.sosAPI.mapUrl(sosLocation);
+    modal('Confirm emergency SMS',`<p>Send an emergency alert to <strong>${esc(contact.name)}</strong> at <strong>${esc(phone)}</strong>?</p><div class="detail-grid sos-confirm-grid"><div><small>Latitude</small><strong>${Number(sosLocation.latitude).toFixed(6)}</strong></div><div><small>Longitude</small><strong>${Number(sosLocation.longitude).toFixed(6)}</strong></div><div><small>GPS accuracy</small><strong>About ±${accuracy} m</strong></div><div><small>Map pin</small><strong><a href="${link}" target="_blank" rel="noopener">Preview pin</a></strong></div></div>${accuracy>100?'<p class="sos-warning" role="alert">GPS accuracy is low. Move outdoors for a better pin, or send now if help is urgent.</p>':''}<p class="muted">This sends a real SMS through the configured provider. It does not call public emergency services.</p><div class="list-actions">${btn('Cancel','cancel-sos-preparation')}${btn('Refresh GPS','confirm-sos')}${btn('Send emergency SMS','send-sos','danger')}</div>`);
+    speak(`Location ready with accuracy about ${accuracy} metres. Confirm emergency again to send a real SMS to ${contact.name}, or say cancel emergency.`);return true;
+  }catch(error){sosPhase='error';sosDetail=error.message;render();modal('Live location is required',`<p>${esc(error.message)}</p><p class="muted">On mobile, turn on Precise Location for this browser. The deployed app must use HTTPS.</p><div class="list-actions">${btn('Close','close-modal')}${btn('Try GPS again','confirm-sos','primary')}</div>`);speak(error.message);return false}
+}
+async function refreshSosStatus(messageId=sosMessageId){
+  if(!messageId||messageId!==sosMessageId)return false;
+  try{
+    const result=await window.sosAPI.checkStatus(messageId);
+    if(messageId!==sosMessageId)return false;
+    sosPhase=result.status;sosActive=!['failed','undelivered','canceled'].includes(result.status);
+    sosDetail=result.status==='delivered'?'Delivery confirmed by the SMS provider.':`SMS provider status: ${result.status}.`;
+    if(['failed','undelivered','canceled'].includes(result.status)){showSosFallback(new Error(`The SMS provider reported “${result.status}”.`));return true}
+    render();if(result.status==='delivered')speak('Emergency SMS delivery confirmed. Your emergency contact has been notified.');
+    return Boolean(result.terminal);
+  }catch{return false}
+}
+async function monitorSosStatus(messageId){
+  for(let attempt=0;attempt<8&&messageId===sosMessageId;attempt++){await new Promise(resolve=>setTimeout(resolve,4000));if(await refreshSosStatus(messageId))return}
+  if(messageId===sosMessageId&&!['delivered','failed','undelivered','canceled'].includes(sosPhase)){sosDetail='The SMS request was accepted, but final delivery confirmation is still pending.';render()}
+}
+async function sendSosAlert(){
+  if(!sosPreparedContact||!sosLocation)return prepareSosAlert();
+  closeModal();sosPhase='sending';sosDetail='';render();speak('Sending the emergency SMS now.');
+  try{
+    const result=await window.sosAPI.sendAlert(sosPreparedContact,sosLocation);
+    sosMessageId=result.messageId;sosPhase=result.status||'queued';sosActive=true;sosDetail='The SMS provider accepted the alert. Waiting for delivery confirmation.';render();
+    speak('Emergency SMS accepted by the provider. Waiting for delivery confirmation.');void monitorSosStatus(result.messageId);return true;
+  }catch(error){showSosFallback(error);return false}
+}
 document.addEventListener('input',e=>{if(e.target.id==='destination-search'){search=e.target.value;$('#search-results').innerHTML=destinationResults()}});
 document.addEventListener('change',e=>{const key=e.target.dataset.setting;if(key){settings[key]=e.target.value;persist();applySettings();toast('Preference updated')}});
-document.addEventListener('submit',e=>{if(e.target.id==='auth-form'){e.preventDefault();authenticated=true;persist();go(onboarded?'home':'welcome');toast(e.target.dataset.mode==='signup'?'Your VisionGuide space is ready.':'Welcome back to VisionGuide.');return}if(e.target.id!=='edit-form')return;e.preventDefault();const f=e.target,data=new FormData(f),id=Number(f.dataset.id),type=f.dataset.type;const item={id:id||Date.now(),name:data.get('name').trim()};if(!item.name)return;if(type==='contact'){Object.assign(item,{relationship:data.get('relationship').trim(),phone:data.get('phone').trim(),primary:id?contacts.find(c=>c.id===id).primary:contacts.length===0});contacts=id?contacts.map(c=>c.id===id?item:c):[...contacts,item]}else{Object.assign(item,{address:data.get('address').trim(),home:id?places.find(p=>p.id===id).home:false,unavailable:id?places.find(p=>p.id===id).unavailable:true});places=id?places.map(p=>p.id===id?item:p):[...places,item]}closeModal();persist();render();toast(type==='contact'?'Contact saved':'Place saved')});
+document.addEventListener('submit',e=>{
+  if(e.target.id==='auth-form'){e.preventDefault();authenticated=true;persist();go(onboarded?'home':'welcome');toast(e.target.dataset.mode==='signup'?'Your VisionGuide space is ready.':'Welcome back to VisionGuide.');return}
+  if(e.target.id!=='edit-form')return;e.preventDefault();
+  const f=e.target,data=new FormData(f),id=Number(f.dataset.id),type=f.dataset.type,item={id:id||Date.now(),name:data.get('name').trim()};
+  if(!item.name)return;
+  if(type==='contact'){
+    const phone=window.sosAPI?.normalizePhone(data.get('phone'))||data.get('phone').trim();
+    if(!window.sosAPI?.isValidPhone(phone)){toast('Enter a valid mobile number. For India, use 10 digits or +91.');document.getElementById('phone')?.focus();return}
+    Object.assign(item,{relationship:data.get('relationship').trim(),phone,primary:id?contacts.find(c=>c.id===id).primary:contacts.length===0});
+    contacts=id?contacts.map(c=>c.id===id?item:c):[...contacts,item];
+  }else{
+    Object.assign(item,{address:data.get('address').trim(),home:id?places.find(p=>p.id===id).home:false,unavailable:id?places.find(p=>p.id===id).unavailable:true});
+    places=id?places.map(p=>p.id===id?item:p):[...places,item];
+  }
+  closeModal();persist();render();toast(type==='contact'?'Contact saved':'Place saved');
+});
 // ── OCR click handler (separate, runs first) ───────────────────────
 document.addEventListener('click', e => {
   const el = e.target.closest('button');
@@ -488,14 +562,37 @@ document.addEventListener('click', e => {
     }
   }
 });
+document.addEventListener('click', e => {
+  const el=e.target.closest?.('button'),a=el?.dataset.action;
+  if(!['confirm-sos','send-sos','clear-sos','cancel-sos-preparation','open-sms-app','copy-sos-message','edit-sos-contact'].includes(a))return;
+  e.preventDefault();e.stopImmediatePropagation();
+  if(a==='confirm-sos'){void prepareSosAlert();return}
+  if(a==='send-sos'){void sendSosAlert();return}
+  if(a==='clear-sos'){clearSosStatus();return}
+  if(a==='cancel-sos-preparation'){closeModal();clearSosStatus();speak('Emergency alert preparation cancelled.');return}
+  if(a==='edit-sos-contact'){const id=Number(el.dataset.id);closeModal();formDialog('contact',id);return}
+  if(a==='open-sms-app'&&sosFallback){window.location.href=sosFallback.url;sosDetail='Messages app opened. Check the recipient and press Send; VisionGuide cannot confirm a manual SMS.';return}
+  if(a==='copy-sos-message'&&sosFallback){
+    const copy=navigator.clipboard?.writeText?.(sosFallback.message);
+    if(copy?.then)copy.then(()=>toast('Emergency text copied. Paste it into Messages and press Send.'),()=>toast('Copy failed. Open your Messages app instead.'));
+    else toast('Copy is unavailable. Open your Messages app instead.');
+  }
+},true);
 // ── Main click handler ─────────────────────────────────────────────
 document.addEventListener('click',e=>{const el=e.target.closest('button');if(!el)return;if(el.dataset.toggle){const key=el.dataset.toggle;settings[key]=!settings[key];if((key==='voice'&&!settings.voice)||(key==='screen'&&settings.screen))cancelVoice();if(key==='history'&&!settings.history)journeys=[];if(key==='location'&&!settings.location){paused=true;clearInterval(timer)}persist();render();requestAnimationFrame(()=>document.querySelector(`[data-toggle="${key}"]`)?.focus());return}if(el.dataset.place){destination={...places.find(p=>p.id===Number(el.dataset.place))};go('preview');return}if(el.dataset.journey){const j=journeys[Number(el.dataset.journey)];modal(esc(j.name),`<div class="detail-grid">${[['Origin','Bandra West, Mumbai'],['Destination',j.name],['Duration',j.duration],['Distance',j.distance],['Status',j.status]].map(([k,v])=>`<div><small>${k}</small><strong>${esc(v)}</strong></div>`).join('')}</div><div class="list-actions">${btn('Close','close-modal','primary')}</div>`);return}const a=el.dataset.action,id=Number(el.dataset.id);if(!a)return;if(['ocr-start','ocr-scan','ocr-auto','ocr-stop','ocr-speak'].includes(a))return;if(handleCameraAction(a,id))return;if(['home','navigate','environment','read','activity','settings','accessibility','sos','places','contacts','privacy','practice','setup','permissions','guidance'].includes(a)){go(a);return}switch(a){case'complete-onboarding':onboarded=true;persist();go('home');break;case'replay-onboarding':go('welcome');break;case'enable-location':settings.location=true;persist();render();toast('Demo location enabled');break;case'begin':if(!settings.location){go('navigate');break}active=true;step=0;paused=!settings.auto;go('guidance');speak(sequence[0][0]);startTimer();break;case'next':advance(1);break;case'previous':advance(-1);break;case'pause':paused=!paused;startTimer();render();break;case'map':mapVisible=!mapVisible;render();break;case'repeat':speak(sequence[step][0]+'. '+sequence[step][1]);toast(settings.voice?'Reading current instruction':'Voice guidance is off');break;case'finish':finish(true);break;case'end-demo':modal('End this demo journey?',`<p>You can begin a new journey any time.</p><div class="list-actions">${btn('Keep going','close-modal')}${btn('End Demo','confirm-end','primary')}</div>`);break;case'confirm-end':closeModal();finish(false);break;case'confirm-sos':modal('Activate a demo SOS?',`<p>${contacts.length?'Your primary contact and sample location will appear in a simulated alert.':'Add an emergency contact before activating SOS.'}</p><p class="muted">No one will be contacted.</p><div class="list-actions">${btn('Cancel','close-modal')}${contacts.length?btn('Confirm SOS','activate-sos','danger'):btn('Add Contact','sos-add-contact','primary')}</div>`);break;case'sos-add-contact':closeModal();go('contacts');formDialog('contact');break;case'activate-sos':closeModal();sosActive=true;render();speak('Demo emergency alert active');break;case'cancel-sos':sosActive=false;render();toast('Demo alert cancelled');break;case'add-contact':formDialog('contact');break;case'edit-contact':formDialog('contact',id);break;case'primary-contact':contacts=contacts.map(c=>({...c,primary:c.id===id}));persist();render();break;case'remove-contact':case'remove-place':modal('Remove this '+(a==='remove-contact'?'contact':'place')+'?',`<p>You can add it again later.</p><div class="list-actions">${btn('Cancel','close-modal')}${btn('Remove',a==='remove-contact'?'delete-contact':'delete-place','danger',`data-id="${id}"`)}</div>`);break;case'delete-contact':contacts=contacts.filter(c=>c.id!==id);if(contacts.length&&!contacts.some(c=>c.primary))contacts[0].primary=true;closeModal();persist();render();break;case'delete-place':places=places.filter(p=>p.id!==id);closeModal();persist();render();break;case'add-place':case'add-destination':formDialog('place');break;case'rename-place':formDialog('place',id);break;case'set-home':places=places.map(p=>({...p,home:p.id===id}));persist();render();break;case'disconnect':device='Disconnected';paused=true;clearInterval(timer);render();toast('Demo device disconnected. Navigation paused.');break;case'reconnect':device='Connecting';render();setTimeout(()=>{device='Connected';render();toast("Device reconnected. Resume when you're ready.")},1000);break;case'start-practice':practice=true;practiceIndex=0;render();speak(practiceCommands[0][0]);break;case'practice-cue':practiceIndex=id;render();speak(practiceCommands[id][0]);break;case'finish-practice':practice=false;go('home');toast("Practice finished. You're ready to explore.");break;case'read-text':readIndex=(readIndex+1)%sampleSigns.length;render();speak(sampleSigns[readIndex]);toast('Reading: '+sampleSigns[readIndex]);break;case'read-aloud':if(readIndex>=0){speak(sampleSigns[readIndex]);toast('Reading: '+sampleSigns[readIndex]);}break;case'close-read':readIndex=-1;render();break;case'test-voice':speak('Continue straight for 40 metres');toast(settings.voice?'Voice preview: Continue straight for 40 metres':'Turn on voice guidance to hear the preview');break;case'safety-stop':case'safety-car':modal(a==='safety-stop'?'STOP':'Vehicle nearby',`<div class="alert-box"><div class="direction">${icon('sos')}</div><h2>${a==='safety-stop'?'Obstacle directly ahead':'Wait before continuing'}</h2><p>Sample safety alert</p></div><div class="list-actions">${btn('Understood','close-modal','primary')}</div>`);speak(a==='safety-stop'?'Stop. Obstacle directly ahead':'Vehicle nearby. Wait before continuing');break;case'close-modal':closeModal();break;case'more':modal('More from VisionGuide',`<div class="stack">${[['camera','Camera guide'],['read','Read a sign'],['environment','Around You'],['activity','Recent Journeys'],['practice','Practice Mode'],['places','Saved Places'],['settings','Settings']].map(([p,t])=>btn(icon(p)+' '+t,'modal-nav','',`data-page="${p}"`)).join('')}${btn('Close','close-modal','text-button')}</div>`);break;case'modal-nav':closeModal();go(el.dataset.page);break;}});
-$('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal()}});
+$('#modal').addEventListener('click',e=>{
+  if(e.target!==$('#modal'))return;
+  const r=e.target.getBoundingClientRect();
+  if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom)return;
+  closeModal();
+  if(page==='sos'&&sosPhase==='ready')clearSosStatus();
+});
+$('#modal').addEventListener('cancel',e=>{if(page==='sos'&&sosPhase==='ready'){e.preventDefault();closeModal();clearSosStatus()}});
 
 /* Public command bridge used by voiceCommands.js. Voice commands and buttons
    deliberately share these functions so they cannot drift into separate flows. */
 window.visionGuideAPI = {
-  getState: () => ({ page, cameraState, cameraDemo, ocrCamActive, active:window.navigationUI?.isActive?.()||active, paused, sosActive }),
+  getState: () => ({ page, cameraState, cameraDemo, ocrCamActive, active:window.navigationUI?.isActive?.()||active, paused, sosActive, sosPhase }),
   speak,
   toast,
   async startCamera() {
@@ -577,17 +674,19 @@ window.visionGuideAPI = {
   },
   emergency() {
     go('sos');
-    speak('Emergency screen open. This prototype does not contact emergency services. Say confirm emergency to activate the demo alert, or cancel.');
+    speak('Emergency screen open. Say confirm emergency to get your live location and review the recipient. VisionGuide contacts your saved person, not public emergency services.');
   },
-  confirmEmergency() {
+  async confirmEmergency() {
     if (page !== 'sos') { speak('Open the emergency screen first by saying emergency.'); return false; }
-    if (!contacts.length) { speak('No emergency contact is saved. Add a contact before activating the demo alert.'); return false; }
-    sosActive=true; render(); speak('Demo emergency alert active. No real message or call was sent.');
-    return true;
+    if (!contacts.length) { speak('No emergency contact is saved. Add a real mobile number before using SOS.'); return false; }
+    if(sosPhase==='ready'&&sosPreparedContact&&sosLocation)return sendSosAlert();
+    return prepareSosAlert();
   },
   cancelEmergency() {
-    if (!sosActive) { speak('There is no active emergency alert.'); return; }
-    sosActive=false; render(); speak('Demo emergency alert cancelled.');
+    if ($('#modal')?.open) closeModal();
+    if (sosActive) { clearSosStatus(); speak('The on-screen status was cleared. A sent SMS cannot be recalled.'); return; }
+    if (sosPhase!=='idle') { clearSosStatus(); speak('Emergency alert preparation cancelled.'); return; }
+    speak('There is no emergency alert in progress.');
   },
   repeat() {
     const text=lastSpokenText;

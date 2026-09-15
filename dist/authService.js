@@ -71,10 +71,17 @@
     return requireClient().auth.signOut({ scope: 'local' });
   }
 
+  async function getAccessToken() {
+    const { data, error } = await requireClient().auth.getSession();
+    if (error) throw error;
+    if (!data.session?.access_token) throw new Error('Your session has expired. Sign in again.');
+    return data.session.access_token;
+  }
+
   function destroy() {
     subscription?.unsubscribe?.();
     subscription = null;
   }
 
-  window.supabaseAuth = { initialize, signUp, signIn, requestPasswordReset, updatePassword, signOut, destroy };
+  window.supabaseAuth = { initialize, signUp, signIn, requestPasswordReset, updatePassword, signOut, getAccessToken, destroy };
 })();

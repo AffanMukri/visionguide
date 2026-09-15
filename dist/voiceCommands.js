@@ -206,7 +206,7 @@
       app.emergency(); return;
     }
     if (/^(confirm emergency|confirm sos|activate (the )?(emergency|sos)( alert)?)$/.test(command)) {
-      app.confirmEmergency(); return;
+      await app.confirmEmergency(); return;
     }
     if (/^(cancel emergency|cancel sos|stop (the )?(emergency|sos)( alert)?)$/.test(command)) {
       app.cancelEmergency(); return;

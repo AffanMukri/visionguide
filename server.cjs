@@ -9,7 +9,9 @@ function loadLocalEnvironment() {
   const allowedNames = new Set([
     'GRAPHHOPPER_API_KEY', 'GRAPHHOPPER_URL',
     'NOMINATIM_URL', 'NOMINATIM_CONTACT',
-    'SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'HOST', 'PORT'
+    'SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_AUTH_USER_URL',
+    'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
+    'TWILIO_MESSAGING_SERVICE_SID', 'TWILIO_API_BASE_URL', 'HOST', 'PORT'
   ]);
   for (const rawLine of fs.readFileSync(environmentFile, 'utf8').split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -37,7 +39,15 @@ const nominatimUrl = process.env.NOMINATIM_URL || 'https://nominatim.openstreetm
 const nominatimContact = process.env.NOMINATIM_CONTACT || 'local VisionGuide development';
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || '';
+const supabaseAuthUserUrl = process.env.SUPABASE_AUTH_USER_URL || (supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/auth/v1/user` : '');
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID || '';
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN || '';
+const twilioFromNumber = process.env.TWILIO_FROM_NUMBER || '';
+const twilioMessagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
+const twilioApiBaseUrl = (process.env.TWILIO_API_BASE_URL || 'https://api.twilio.com').replace(/\/$/, '');
 const geocodeCache = new Map();
+const sosRateLimits = new Map();
+const sosMessages = new Map();
 let lastNominatimRequest = 0;
 let nominatimQueue = Promise.resolve();
 
@@ -118,6 +128,112 @@ async function route(req, res) {
   }
 }
 
+function validPhone(phone) {
+  return /^\+[1-9]\d{7,14}$/.test(String(phone || ''));
+}
+
+function twilioConfigured() {
+  return Boolean(twilioAccountSid && twilioAuthToken && (twilioFromNumber || twilioMessagingServiceSid));
+}
+
+function twilioHeaders() {
+  return {
+    Accept: 'application/json',
+    Authorization: `Basic ${Buffer.from(`${twilioAccountSid}:${twilioAuthToken}`).toString('base64')}`
+  };
+}
+
+async function authenticate(req) {
+  const authorization = String(req.headers.authorization || '');
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (!token || token.length > 4096 || !supabaseAuthUserUrl || !supabasePublishableKey) return null;
+  try {
+    const response = await fetchWithTimeout(supabaseAuthUserUrl, { headers: {
+      Accept: 'application/json', apikey: supabasePublishableKey, Authorization: `Bearer ${token}`
+    }}, 10000);
+    if (!response.ok) return null;
+    const user = await response.json();
+    return user?.id ? user : null;
+  } catch { return null; }
+}
+
+function emergencyMessage(user, location) {
+  const displayName = String(user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'A VisionGuide user')
+    .replace(/[\r\n\t]+/g, ' ').trim().slice(0, 50);
+  const latitude = Number(location.latitude).toFixed(6);
+  const longitude = Number(location.longitude).toFixed(6);
+  const accuracy = Math.max(1, Math.round(Number(location.accuracy)));
+  return `EMERGENCY: ${displayName} may need help. Location: https://www.google.com/maps?q=${latitude},${longitude} (GPS accuracy about ${accuracy} metres). Please contact them now.`;
+}
+
+async function sendSos(req, res) {
+  const user = await authenticate(req);
+  if (!user) return json(res, 401, { code: 'AUTH_REQUIRED', error: 'Your session expired. Sign in again before sending an emergency alert.' });
+
+  let body;
+  try { body = await readJson(req); } catch (error) { return json(res, 400, { code: 'INVALID_REQUEST', error: error.message }); }
+  const location = body.location || {};
+  const accuracy = Number(location.accuracy);
+  if (!validPhone(body.phone)) return json(res, 400, { code: 'INVALID_PHONE', error: 'The emergency contact phone number must include a valid country code.' });
+  if (!validPoint(location) || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000)
+    return json(res, 400, { code: 'INVALID_LOCATION', error: 'A valid live GPS location is required.' });
+  if (!twilioConfigured()) return json(res, 503, { code: 'SOS_NOT_CONFIGURED', error: 'Automatic emergency SMS is not configured on this server.' });
+
+  const now = Date.now();
+  for (const [key, value] of sosRateLimits) if (now - value > 300000) sosRateLimits.delete(key);
+  for (const [key, value] of sosMessages) if (now > value.expiresAt) sosMessages.delete(key);
+  const lastSend = sosRateLimits.get(user.id) || 0;
+  if (now - lastSend < 60000) return json(res, 429, {
+    code: 'SOS_RATE_LIMITED', error: `An emergency SMS was already requested. Wait ${Math.ceil((60000 - (now - lastSend)) / 1000)} seconds before sending another.`
+  });
+  sosRateLimits.set(user.id, now);
+
+  const form = new URLSearchParams({ To: body.phone, Body: emergencyMessage(user, location) });
+  if (twilioMessagingServiceSid) form.set('MessagingServiceSid', twilioMessagingServiceSid);
+  else form.set('From', twilioFromNumber);
+  const url = `${twilioApiBaseUrl}/2010-04-01/Accounts/${encodeURIComponent(twilioAccountSid)}/Messages.json`;
+  try {
+    const response = await fetchWithTimeout(url, { method: 'POST', headers: {
+      ...twilioHeaders(), 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+    }, body: form.toString() }, 15000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.sid) {
+      sosRateLimits.delete(user.id);
+      const configurationError = response.status === 401 || response.status === 403;
+      return json(res, response.status >= 400 && response.status < 500 ? 502 : response.status, {
+        code: configurationError ? 'SOS_PROVIDER_AUTH_FAILED' : 'SOS_PROVIDER_REJECTED',
+        error: configurationError
+          ? 'The SMS provider credentials were rejected. Use the phone SMS fallback and ask the administrator to check Twilio.'
+          : 'The SMS provider could not accept this emergency message. Use the phone SMS fallback.'
+      });
+    }
+    const status = String(data.status || 'queued').toLowerCase();
+    sosMessages.set(data.sid, { userId: user.id, expiresAt: now + 86400000 });
+    return json(res, 202, { ok: true, messageId: data.sid, status, sentAt: new Date().toISOString() });
+  } catch (error) {
+    sosRateLimits.delete(user.id);
+    return json(res, 502, { code: 'SOS_PROVIDER_UNAVAILABLE',
+      error: error.name === 'AbortError' ? 'The SMS provider timed out. Use the phone SMS fallback.' : 'The SMS provider is unavailable. Use the phone SMS fallback.' });
+  }
+}
+
+async function sosStatus(req, res, requestUrl) {
+  const user = await authenticate(req);
+  if (!user) return json(res, 401, { code: 'AUTH_REQUIRED', error: 'Your session expired. Sign in again.' });
+  const id = String(requestUrl.searchParams.get('id') || '');
+  const entry = sosMessages.get(id);
+  if (!/^(SM|MM)[0-9a-fA-F]{32}$/.test(id) || !entry || entry.userId !== user.id || Date.now() > entry.expiresAt)
+    return json(res, 404, { code: 'SOS_STATUS_NOT_FOUND', error: 'Emergency message status is unavailable.' });
+  try {
+    const url = `${twilioApiBaseUrl}/2010-04-01/Accounts/${encodeURIComponent(twilioAccountSid)}/Messages/${encodeURIComponent(id)}.json`;
+    const response = await fetchWithTimeout(url, { headers: twilioHeaders() }, 10000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return json(res, 502, { code: 'SOS_STATUS_UNAVAILABLE', error: 'Delivery status is temporarily unavailable.' });
+    const status = String(data.status || 'unknown').toLowerCase();
+    return json(res, 200, { messageId: id, status, terminal: ['delivered', 'failed', 'undelivered', 'canceled'].includes(status) });
+  } catch { return json(res, 502, { code: 'SOS_STATUS_UNAVAILABLE', error: 'Delivery status is temporarily unavailable.' }); }
+}
+
 const server = http.createServer((req, res) => {
   let requestUrl;
   try { requestUrl = new URL(req.url, 'http://localhost'); }
@@ -129,6 +245,8 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && requestUrl.pathname === '/api/geocode') { void geocode(res, requestUrl); return; }
   if (req.method === 'POST' && requestUrl.pathname === '/api/route') { void route(req, res); return; }
+  if (req.method === 'POST' && requestUrl.pathname === '/api/sos') { void sendSos(req, res); return; }
+  if (req.method === 'GET' && requestUrl.pathname === '/api/sos-status') { void sosStatus(req, res, requestUrl); return; }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' }).end();
     return;

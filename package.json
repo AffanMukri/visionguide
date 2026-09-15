@@ -5,7 +5,7 @@
   "description": "Accessible camera-preview and spoken-guidance prototype",
   "scripts": {
     "start": "node server.cjs",
-    "test": "node tests/verify-auth.cjs && node tests/verify-camera.cjs && node tests/verify-voice.cjs && node tests/verify-vision.cjs && node tests/verify-navigation.cjs && node tests/verify-navigation-server.cjs",
+    "test": "node tests/verify-auth.cjs && node tests/verify-sos.cjs && node tests/verify-camera.cjs && node tests/verify-voice.cjs && node tests/verify-vision.cjs && node tests/verify-navigation.cjs && node tests/verify-navigation-server.cjs",
     "test:browser": "node tests/browser-navigation.cjs"
   },
   "engines": {

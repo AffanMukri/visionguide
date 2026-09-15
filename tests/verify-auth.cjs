@@ -3,12 +3,13 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 
 const calls = {};
+let currentSession = null;
 const auth = {
   onAuthStateChange(callback) {
     calls.callback = callback;
     return { data: { subscription: { unsubscribe() { calls.unsubscribed = true; } } } };
   },
-  async getSession() { return { data: { session: null }, error: null }; },
+  async getSession() { return { data: { session: currentSession }, error: null }; },
   async signUp(input) { calls.signUp = input; return { data: { session: null }, error: null }; },
   async signInWithPassword(input) { calls.signIn = input; return { data: { session: { user: { id: 'user-1' } } }, error: null }; },
   async resetPasswordForEmail(email, options) { calls.reset = { email, options }; return { data: {}, error: null }; },
@@ -41,6 +42,8 @@ vm.runInContext(fs.readFileSync('dist/authService.js', 'utf8'), context);
   assert.equal(calls.signUp.options.emailRedirectTo, 'https://visionguide.example/');
   await window.supabaseAuth.signIn({ email: 'test@example.com', password: 'password-123' });
   assert.equal(calls.signIn.email, 'test@example.com');
+  currentSession = { access_token: 'test-access-token', user: { id: 'user-1' } };
+  assert.equal(await window.supabaseAuth.getAccessToken(), 'test-access-token');
   await window.supabaseAuth.requestPasswordReset('test@example.com');
   assert.equal(calls.reset.options.redirectTo, 'https://visionguide.example/');
   await window.supabaseAuth.updatePassword('new-password-123');
